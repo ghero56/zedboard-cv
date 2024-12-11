@@ -1,7 +1,6 @@
 import cv2
 from flask import Flask, Response, request, render_template_string
 import numpy as np
-import imageio
 from flask_cors import CORS
 
 class VideoStreamServer:
@@ -87,15 +86,24 @@ class VideoStreamServer:
             print("File received:", file.filename)  # Depuración
 
             try:
-                video_data = file.read()
-                print("Video data length:", len(video_data))  # Depuración
-                video_reader = imageio.get_reader(video_data, 'webm')
+                # Guardar temporalmente el video recibido
+                temp_file_path = "/tmp/uploaded_video.webm"
+                file.save(temp_file_path)
 
-                for frame in video_reader:
-                    image = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)  # Convertir de RGB a BGR
-                    resized_frame = cv2.resize(image, (1920, 1080))
+                # Leer el video con OpenCV
+                cap = cv2.VideoCapture(temp_file_path)
+                if not cap.isOpened():
+                    print("Failed to open video file")
+                    return "Failed to open video file", 500
+
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    resized_frame = cv2.resize(frame, (1920, 1080))
                     self.frames.append(resized_frame)
 
+                cap.release()
                 return "Frame recibido", 200
 
             except Exception as e:
@@ -105,6 +113,7 @@ class VideoStreamServer:
         except Exception as e:
             print(f"Error in upload: {e}")  # Captura cualquier otro error
             return f"Error in upload: {e}", 500
+
 
     def generate_frames(self):
         while True:
