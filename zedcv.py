@@ -1,21 +1,27 @@
 import os
 import cv2
+import threading
+import queue
 from flask import Flask, Response, request, render_template_string
 from flask_cors import CORS
-import tempfile
+
 
 class VideoStreamServer:
-    def __init__(self, host='0.0.0.0', port=8080):
+    def __init__(self, host="0.0.0.0", port=8080):
         self.app = Flask(__name__)
         CORS(self.app)
         self.host = host
         self.port = port
-        self.frames = []
 
-        self.app.add_url_rule('/', 'index', self.index)
-        self.app.add_url_rule('/upload', 'upload', self.upload, methods=['POST'])
-        self.app.add_url_rule('/video', 'video', self.video)
-        self.app.add_url_rule('/view_video', 'view_video', self.view_video)
+        self.frame_queue = queue.Queue(maxsize=10)  # Buffer para los frames procesados
+        self.processing_lock = (
+            threading.Lock()
+        )  # Asegura que solo un hilo procese a la vez
+
+        self.app.add_url_rule("/", "index", self.index)
+        self.app.add_url_rule("/upload", "upload", self.upload, methods=["POST"])
+        self.app.add_url_rule("/video", "video", self.video)
+        self.app.add_url_rule("/view_video", "view_video", self.view_video)
 
     def index(self):
         html_content = """
@@ -23,53 +29,33 @@ class VideoStreamServer:
         <html lang="en">
         <head>
             <meta charset="UTF-8">
-            <title>Captura y Envío de Video</title>
+            <title>Captura de Video</title>
         </head>
         <body>
             <h1>Captura de Video</h1>
             <video id="video" autoplay playsinline></video>
-            <p id="error-message" style="color: red;"></p>
             <script>
                 const video = document.getElementById('video');
-                const errorMessage = document.getElementById('error-message');
 
                 async function startVideoCapture() {
-                    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                        errorMessage.textContent = 'El acceso a la cámara no está soportado en este navegador.';
-                        console.error('getUserMedia no está soportado en este navegador.');
-                        return;
-                    }
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                    video.srcObject = stream;
 
-                    try {
-                        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                        video.srcObject = stream;
+                    const mediaRecorder = new MediaRecorder(stream);
+                    mediaRecorder.ondataavailable = async (event) => {
+                        if (event.data.size > 0) {
+                            const formData = new FormData();
+                            formData.append('file', event.data, 'video.webm');
 
-                        const mediaRecorder = new MediaRecorder(stream);
-                        mediaRecorder.ondataavailable = async (event) => {
-                            if (event.data.size > 0) {
-                                const formData = new FormData();
-                                formData.append('file', event.data, 'video.webm');
+                            await fetch('/upload', {
+                                method: 'POST',
+                                body: formData
+                            });
+                        }
+                    };
 
-                                try {
-                                    const response = await fetch('/upload', {
-                                        method: 'POST',
-                                        body: formData
-                                    });
-                                    console.log('Frame enviado:', response.status);
-                                } catch (error) {
-                                    console.error('Error al enviar el frame:', error);
-                                }
-                            }
-                        };
-
-                        mediaRecorder.start(1000); // Captura video cada segundo
-                        console.log('Grabación iniciada');
-                    } catch (error) {
-                        errorMessage.textContent = 'No se pudo acceder a la cámara: ' + error.message;
-                        console.error('Error al acceder a la cámara:', error);
-                    }
+                    mediaRecorder.start(1000);  // Captura cada segundo
                 }
-
                 startVideoCapture();
             </script>
             <a href="/view_video">Ver video procesado</a>
@@ -79,60 +65,57 @@ class VideoStreamServer:
         return render_template_string(html_content)
 
     def upload(self):
+        if "file" not in request.files:
+            return "No file part", 400
+
+        file = request.files["file"]
+        if file.filename == "":
+            return "No selected file", 400
+
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            temp_file.write(file.read())
+            temp_file_path = temp_file.name
+
+        threading.Thread(target=self.process_video, args=(temp_file_path,)).start()
+        return "Video recibido", 200
+
+    def process_video(self, video_path):
         try:
-            if 'file' not in request.files:
-                print("No file part")
-                return "No file part", 400
+            video_capture = cv2.VideoCapture(video_path)
 
-            file = request.files['file']
-            if file.filename == '':
-                print("No selected file")
-                return "No selected file", 400
+            while True:
+                ret, frame = video_capture.read()
+                if not ret:
+                    break
 
-            print("File received:", file.filename)  # Depuración
-
-            try:
-                # Guardar el archivo temporalmente en disco
-                with tempfile.NamedTemporaryFile(delete=False) as temp_file:
-                    temp_file.write(file.read())
-                    temp_file_path = temp_file.name
-
-                # Usar OpenCV para leer el archivo temporal guardado
-                video_capture = cv2.VideoCapture(temp_file_path)
-
-                while True:
-                    ret, frame = video_capture.read()
-                    if not ret:
-                        break
-
-                    # Convertir la imagen a BGR y redimensionarla
+                with self.processing_lock:
+                    # Procesa el frame y lo escala
                     resized_frame = cv2.resize(frame, (1920, 1080))
-                    self.frames.append(resized_frame)
+                    if not self.frame_queue.full():
+                        self.frame_queue.put(resized_frame)
 
-                # Eliminar el archivo temporal después de procesarlo
-                os.remove(temp_file_path)
-
-                return "Frame recibido", 200
-
-            except Exception as e:
-                print(f"Failed to process video: {e}")  # Depuración
-                return f"Failed to process video: {e}", 500
-
+            video_capture.release()
+            os.remove(video_path)
         except Exception as e:
-            print(f"Error in upload: {e}")  # Captura cualquier otro error
-            return f"Error in upload: {e}", 500
+            print(f"Error en el procesamiento: {e}")
 
     def generate_frames(self):
         while True:
-            if self.frames:
-                frame = self.frames.pop(0)
-                ret, buffer = cv2.imencode('.jpg', frame)
-                frame = buffer.tobytes()
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+            if not self.frame_queue.empty():
+                with self.processing_lock:
+                    frame = self.frame_queue.get()
+                    ret, buffer = cv2.imencode(".jpg", frame)
+                    if not ret:
+                        continue
+                    frame = buffer.tobytes()
+                yield (
+                    b"--frame\r\n" b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
+                )
 
     def video(self):
-        return Response(self.generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+        return Response(
+            self.generate_frames(), mimetype="multipart/x-mixed-replace; boundary=frame"
+        )
 
     def view_video(self):
         html_content = """
@@ -144,21 +127,16 @@ class VideoStreamServer:
         </head>
         <body>
             <h1>Video Procesado</h1>
-            <video id="processed-video" width="1920" height="1080" controls autoplay></video>
-            <script>
-                const videoElement = document.getElementById('processed-video');
-                videoElement.src = '/video';  // Fuente del video procesado
-                videoElement.play();
-            </script>
+            <img src="/video" style="width:100%; max-width:1920px; height:auto;" />
         </body>
         </html>
         """
         return render_template_string(html_content)
 
     def run(self):
-        print(f"Starting server at {self.host}:{self.port}")  # Depuración
-        self.app.run(host=self.host, port=self.port)
+        self.app.run(host=self.host, port=self.port, threaded=True)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     server = VideoStreamServer()
     server.run()
