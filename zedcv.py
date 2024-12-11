@@ -1,8 +1,6 @@
+import cv2
 from flask import Flask, Response, request, render_template_string
 from flask_cors import CORS
-import cv2
-import imageio
-import os
 
 class VideoStreamServer:
     def __init__(self, host='0.0.0.0', port=8080):
@@ -92,13 +90,22 @@ class VideoStreamServer:
             print("File received:", file.filename)  # Depuración
 
             try:
+                # Usando OpenCV para leer el video directamente desde el archivo
                 video_data = file.read()
-                print("Video data length:", len(video_data))  # Depuración
-                video_reader = imageio.get_reader(video_data, 'webm')
+                video_capture = cv2.VideoCapture(cv2.CAP_FFMPEG)
 
-                for frame in video_reader:
-                    image = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)  # Convertir de RGB a BGR
-                    resized_frame = cv2.resize(image, (1920, 1080))
+                # Crear un objeto VideoCapture desde el flujo binario
+                nparr = np.frombuffer(video_data, np.uint8)
+                video_capture.open(nparr)
+
+                # Leer los frames del video y procesarlos
+                while True:
+                    ret, frame = video_capture.read()
+                    if not ret:
+                        break
+
+                    # Convertir la imagen a BGR y redimensionarla
+                    resized_frame = cv2.resize(frame, (1920, 1080))
                     self.frames.append(resized_frame)
 
                 return "Frame recibido", 200
