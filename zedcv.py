@@ -1,6 +1,8 @@
+import os
 import cv2
 from flask import Flask, Response, request, render_template_string
 from flask_cors import CORS
+import tempfile
 
 class VideoStreamServer:
     def __init__(self, host='0.0.0.0', port=8080):
@@ -90,15 +92,14 @@ class VideoStreamServer:
             print("File received:", file.filename)  # Depuración
 
             try:
-                # Usando OpenCV para leer el video directamente desde el archivo
-                video_data = file.read()
-                video_capture = cv2.VideoCapture(cv2.CAP_FFMPEG)
+                # Guardar el archivo temporalmente en disco
+                with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+                    temp_file.write(file.read())
+                    temp_file_path = temp_file.name
 
-                # Crear un objeto VideoCapture desde el flujo binario
-                nparr = np.frombuffer(video_data, np.uint8)
-                video_capture.open(nparr)
+                # Usar OpenCV para leer el archivo temporal guardado
+                video_capture = cv2.VideoCapture(temp_file_path)
 
-                # Leer los frames del video y procesarlos
                 while True:
                     ret, frame = video_capture.read()
                     if not ret:
@@ -107,6 +108,9 @@ class VideoStreamServer:
                     # Convertir la imagen a BGR y redimensionarla
                     resized_frame = cv2.resize(frame, (1920, 1080))
                     self.frames.append(resized_frame)
+
+                # Eliminar el archivo temporal después de procesarlo
+                os.remove(temp_file_path)
 
                 return "Frame recibido", 200
 
@@ -140,7 +144,7 @@ class VideoStreamServer:
         </head>
         <body>
             <h1>Video Procesado</h1>
-            <video id="processed-video" width="800" height="600" controls autoplay></video>
+            <video id="processed-video" width="1920" height="1080" controls autoplay></video>
             <script>
                 const videoElement = document.getElementById('processed-video');
                 videoElement.src = '/video';  // Fuente del video procesado
@@ -153,7 +157,7 @@ class VideoStreamServer:
 
     def run(self):
         print(f"Starting server at {self.host}:{self.port}")  # Depuración
-        self.app.run(host=self.host, port=self.port, ssl_context=('ssl/server.crt', 'ssl/server.key'))
+        self.app.run(host=self.host, port=self.port)
 
 if __name__ == '__main__':
     server = VideoStreamServer()
