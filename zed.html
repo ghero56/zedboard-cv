@@ -3,60 +3,34 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>Captura y Envío de Video</title>
+    <title>Captura de Video</title>
 </head>
 
 <body>
     <h1>Captura de Video</h1>
     <video id="video" autoplay playsinline></video>
-    <p id="error-message" style="color: red;"></p>
     <script>
         const video = document.getElementById('video');
-        const errorMessage = document.getElementById('error-message');
 
         async function startVideoCapture() {
-            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                errorMessage.textContent = 'El acceso a la cámara no está soportado en este navegador.';
-                console.error('getUserMedia no está soportado en este navegador.');
-                return;
-            }
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            video.srcObject = stream;
 
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                video.srcObject = stream;
+            const mediaRecorder = new MediaRecorder(stream);
+            mediaRecorder.ondataavailable = async (event) => {
+                if (event.data.size > 0) {
+                    const formData = new FormData();
+                    formData.append('file', event.data, 'video.webm');
 
-                const mediaRecorder = new MediaRecorder(stream);
-                mediaRecorder.ondataavailable = async (event) => {
-                    if (event.data.size > 0) {
-                        const formData = new FormData();
-                        formData.append('file', event.data, 'video.webm');
+                    await fetch('http://192.168.0.87:8080/upload', {
+                        method: 'POST',
+                        body: formData
+                    });
+                }
+            };
 
-                        try {
-                            const response = await fetch('http://192.168.0.87:8080/upload', {
-                                method: 'POST',
-                                body: formData
-                            });
-
-                            if (!response.ok) {
-                                console.error('Error en la respuesta del servidor:', response.status, response.statusText);
-                            } else {
-                                console.log('Frame enviado exitosamente:', response.status);
-                            }
-                        } catch (error) {
-                            console.error('Error al realizar la solicitud fetch:', error);
-                        }
-
-                    }
-                };
-
-                mediaRecorder.start(1000); // Captura video cada segundo
-                console.log('Grabación iniciada');
-            } catch (error) {
-                errorMessage.textContent = 'No se pudo acceder a la cámara: ' + error.message;
-                console.error('Error al acceder a la cámara:', error);
-            }
+            mediaRecorder.start(1000);  // Captura cada segundo
         }
-
         startVideoCapture();
     </script>
     <a href="/view_video">Ver video procesado</a>

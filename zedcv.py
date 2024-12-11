@@ -1,6 +1,7 @@
 import os
 import cv2
 import threading
+import tempfile
 import queue
 from flask import Flask, Response, request, render_template_string
 from flask_cors import CORS
