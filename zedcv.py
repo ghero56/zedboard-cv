@@ -1,7 +1,8 @@
-import cv2
 from flask import Flask, Response, request, render_template_string
-import numpy as np
 from flask_cors import CORS
+import cv2
+import imageio
+import os
 
 class VideoStreamServer:
     def __init__(self, host='0.0.0.0', port=8080):
@@ -77,7 +78,6 @@ class VideoStreamServer:
         """
         return render_template_string(html_content)
 
-
     def upload(self):
         try:
             if 'file' not in request.files:
@@ -92,24 +92,15 @@ class VideoStreamServer:
             print("File received:", file.filename)  # Depuración
 
             try:
-                # Guardar temporalmente el video recibido
-                temp_file_path = "/tmp/uploaded_video.webm"
-                file.save(temp_file_path)
+                video_data = file.read()
+                print("Video data length:", len(video_data))  # Depuración
+                video_reader = imageio.get_reader(video_data, 'webm')
 
-                # Leer el video con OpenCV
-                cap = cv2.VideoCapture(temp_file_path)
-                if not cap.isOpened():
-                    print("Failed to open video file")
-                    return "Failed to open video file", 500
-
-                while True:
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-                    resized_frame = cv2.resize(frame, (1920, 1080))
+                for frame in video_reader:
+                    image = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)  # Convertir de RGB a BGR
+                    resized_frame = cv2.resize(image, (1920, 1080))
                     self.frames.append(resized_frame)
 
-                cap.release()
                 return "Frame recibido", 200
 
             except Exception as e:
@@ -119,7 +110,6 @@ class VideoStreamServer:
         except Exception as e:
             print(f"Error in upload: {e}")  # Captura cualquier otro error
             return f"Error in upload: {e}", 500
-
 
     def generate_frames(self):
         while True:
@@ -156,7 +146,7 @@ class VideoStreamServer:
 
     def run(self):
         print(f"Starting server at {self.host}:{self.port}")  # Depuración
-        self.app.run(host=self.host, port=self.port)
+        self.app.run(host=self.host, port=self.port, ssl_context=('ssl/server.crt', 'ssl/server.key'))
 
 if __name__ == '__main__':
     server = VideoStreamServer()
