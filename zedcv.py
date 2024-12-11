@@ -26,11 +26,15 @@ class VideoStreamServer:
         </head>
         <body>
             <h1>Captura de Video</h1>
-            <video id="video" autoplay></video>
+            <video id="video" autoplay playsinline></video>
+            <p id="error-message" style="color: red;"></p>
             <script>
                 const video = document.getElementById('video');
+                const errorMessage = document.getElementById('error-message');
+
                 async function startVideoCapture() {
                     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                        errorMessage.textContent = 'El acceso a la cámara no está soportado en este navegador.';
                         console.error('getUserMedia no está soportado en este navegador.');
                         return;
                     }
@@ -60,6 +64,7 @@ class VideoStreamServer:
                         mediaRecorder.start(1000); // Captura video cada segundo
                         console.log('Grabación iniciada');
                     } catch (error) {
+                        errorMessage.textContent = 'No se pudo acceder a la cámara: ' + error.message;
                         console.error('Error al acceder a la cámara:', error);
                     }
                 }
@@ -71,6 +76,7 @@ class VideoStreamServer:
         </html>
         """
         return render_template_string(html_content)
+
 
     def upload(self):
         try:
